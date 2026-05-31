@@ -1,0 +1,966 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kitchen App</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+        },
+      },
+    };
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+</head>
+<body class="font-sans antialiased bg-slate-50 text-slate-900">
+  <div id="app">
+    <!-- Bootstrap loader -->
+    <!-- Toasts globales -->
+    <div id="toast-container" aria-live="polite" aria-atomic="true"
+      class="fixed bottom-5 right-5 z-[60] space-y-2 w-[calc(100%-2rem)] max-w-sm pointer-events-none">
+      <div v-for="t in toasts" :key="t.id"
+        class="pointer-events-auto flex items-start gap-3 p-4 rounded-xl border shadow-lg animate-in fade-in slide-in-from-bottom-2"
+        :class="toastBoxClass(t.type)">
+        <span class="text-lg shrink-0 leading-none" aria-hidden="true">{{ toastEmoji(t.type) }}</span>
+        <p class="text-sm font-medium flex-1 leading-snug">{{ t.message }}</p>
+        <button type="button" @click="dismissToast(t.id)" class="shrink-0 opacity-60 hover:opacity-100 p-0.5 text-sm" aria-label="Cerrar">✕</button>
+      </div>
+    </div>
+
+    <!-- Confirmación eliminar (US-05) -->
+    <div v-if="pendingDeleteRecipe" class="fixed inset-0 z-[70] flex items-center justify-center p-4">
+      <div class="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" @click="cancelDeleteRecipe"></div>
+      <div class="relative bg-white rounded-2xl border border-slate-200 shadow-xl max-w-md w-full p-6">
+        <h3 class="text-lg font-semibold text-slate-900">¿Eliminar receta?</h3>
+        <p class="text-sm text-slate-600 mt-2">Se eliminará <strong>{{ pendingDeleteRecipe.title }}</strong> y sus ingredientes/pasos en cascada. No se puede deshacer.</p>
+        <div class="flex gap-3 mt-6">
+          <button type="button" @click="cancelDeleteRecipe"
+            class="flex-1 rounded-lg border border-slate-300 bg-white py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancelar</button>
+          <button type="button" @click="confirmDeleteRecipe" :disabled="deleteInProgress"
+            class="flex-1 rounded-lg bg-red-600 hover:bg-red-700 text-white py-2.5 text-sm font-semibold disabled:opacity-60">
+            {{ deleteInProgress ? 'Eliminando…' : 'Eliminar' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Detalle de receta + reseñas (US-08) -->
+    <div v-if="recipeDetail" class="fixed inset-0 z-[65] flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div class="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" @click="closeRecipeDetail"></div>
+      <div class="relative bg-white rounded-t-2xl sm:rounded-2xl border border-slate-200 shadow-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto">
+        <div v-if="hasRecipeImage(recipeDetail.image_url)" class="w-full h-48 sm:h-56 overflow-hidden rounded-t-2xl sm:rounded-t-2xl bg-slate-100">
+          <img :src="recipeDetail.image_url" :alt="recipeDetail.title" class="w-full h-full object-cover" @error="$event.target.style.display='none'" />
+        </div>
+        <div v-else class="w-full h-40 flex items-center justify-center bg-gradient-to-br from-orange-50 to-slate-100 rounded-t-2xl">
+          <span class="text-5xl">🖼️</span>
+        </div>
+        <div class="p-6 space-y-5">
+          <div class="flex justify-between gap-3">
+            <div>
+              <span class="text-xs font-medium text-orange-700 bg-orange-50 px-2 py-0.5 rounded">{{ recipeDetail.category }}</span>
+              <h3 class="text-xl font-bold text-slate-900 mt-2">{{ recipeDetail.title }}</h3>
+              <p class="text-sm text-slate-500 mt-1">{{ recipeDetail.cooking_time }} min · {{ recipeDetail.calories || 0 }} kcal</p>
+            </div>
+            <button type="button" @click="closeRecipeDetail" class="shrink-0 p-2 rounded-lg hover:bg-slate-100" aria-label="Cerrar">
+              <span class="text-lg">✕</span>
+            </button>
+          </div>
+          <p v-if="recipeDetail.description" class="text-sm text-slate-700">{{ recipeDetail.description }}</p>
+          <p v-if="recipeDetailLoading" class="text-sm text-slate-500">Cargando detalle…</p>
+          <div v-if="recipeDetail.recipe_ingredients?.length">
+            <h4 class="text-sm font-semibold text-slate-900 mb-2">Ingredientes</h4>
+            <ul class="text-sm text-slate-600 space-y-1">
+              <li v-for="(ing, i) in recipeDetail.recipe_ingredients" :key="i">· {{ ing.amount }} {{ ing.unit }} {{ ing.name }}</li>
+            </ul>
+          </div>
+          <div v-if="recipeDetail.recipe_steps?.length">
+            <h4 class="text-sm font-semibold text-slate-900 mb-2">Pasos</h4>
+            <ol class="text-sm text-slate-600 space-y-2 list-decimal list-inside">
+              <li v-for="s in sortedDetailSteps" :key="s.step_number">{{ s.instruction }}</li>
+            </ol>
+          </div>
+          <div class="flex flex-wrap gap-2 pt-2 border-t border-slate-100">
+            <button type="button" @click="shareRecipe(recipeDetail)"
+              class="inline-flex items-center gap-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 px-4 py-2 text-sm font-medium">
+              <span>🔗</span> Compartir
+            </button>
+            <button type="button" @click="toggleFavorite(recipeDetail)"
+              class="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-4 py-2 text-sm">
+              <span>{{ isFavorite(recipeDetail.id) ? '❤️' : '🤍' }}</span> Favorito
+            </button>
+          </div>
+          <div class="border-t border-slate-100 pt-5">
+            <h4 class="text-sm font-semibold text-slate-900 mb-3">Reseñas de la comunidad</h4>
+            <div class="mb-4">
+              <span class="block text-xs font-medium text-slate-600 mb-2">Tu valoración</span>
+              <div class="flex gap-1" @mouseleave="clearDetailReviewHover">
+                <button v-for="n in 5" :key="'ds'+n" type="button"
+                  @mouseenter="setDetailReviewHover(n)" @click="setDetailReviewStars(n)"
+                  class="p-0.5 rounded transition-transform hover:scale-110">
+                  <span class="text-2xl leading-none">{{ n <= detailReviewStars ? '⭐' : '☆' }}</span>
+                </button>
+              </div>
+            </div>
+            <textarea v-model="detailReviewForm.comment" rows="2" placeholder="Escribe tu comentario…"
+              class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm shadow-sm focus:ring-2 focus:ring-orange-500 outline-none mb-3"></textarea>
+            <button type="button" @click="submitDetailReview" :disabled="reviewSubmitting"
+              class="rounded-lg bg-orange-500 hover:bg-orange-600 text-white text-sm font-semibold px-4 py-2 disabled:opacity-60">
+              Publicar reseña
+            </button>
+            <p v-if="detailReviewsLoading" class="text-sm text-slate-500 mt-4">Cargando reseñas…</p>
+            <ul v-else class="mt-4 space-y-3 max-h-40 overflow-y-auto">
+              <li v-for="rev in detailReviews" :key="rev.id" class="p-3 rounded-lg bg-slate-50 border border-slate-100 text-sm">
+                <div class="flex gap-0.5 mb-1">
+                  <span v-for="n in 5" :key="n" class="text-sm">{{ n <= rev.rating ? '⭐' : '☆' }}</span>
+                </div>
+                <p class="text-slate-700">{{ rev.comment || 'Sin comentario' }}</p>
+              </li>
+              <li v-if="!detailReviews.length" class="text-slate-500 text-sm">Sé el primero en valorar esta receta.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="layout === 'boot'" class="min-h-screen flex items-center justify-center bg-slate-50">
+      <div class="text-center">
+        <span class="text-4xl block" aria-hidden="true">🍳</span>
+        <p class="mt-4 text-slate-600 text-sm">Iniciando Kitchen App…</p>
+      </div>
+    </div>
+
+    <!-- LAYOUT AUTH: /#/auth -->
+    <div v-else-if="layout === 'auth'" class="min-h-screen flex items-center justify-center p-6 bg-gradient-to-br from-slate-900 via-slate-800 to-amber-950">
+      <div class="w-full max-w-md">
+        <div class="text-center mb-8">
+          <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-amber-500/20 border border-amber-500/40 mb-4">
+            <span class="text-3xl" aria-hidden="true">🍽️</span>
+          </div>
+          <h1 class="text-2xl font-bold text-white">Kitchen App</h1>
+          <p class="text-slate-400 text-sm mt-1">Gestión profesional de recetas</p>
+        </div>
+
+        <div class="bg-white rounded-2xl shadow-xl shadow-black/20 p-8 border border-slate-200/10">
+          <div class="flex gap-1 p-1 bg-slate-100 rounded-xl mb-6">
+            <button type="button" @click="authMode = 'login'; authError = ''"
+              :class="authMode === 'login' ? 'bg-white shadow text-slate-900' : 'text-slate-500'"
+              class="flex-1 py-2 rounded-lg text-sm font-medium transition">Iniciar sesión</button>
+            <button type="button" @click="authMode = 'register'; authError = ''"
+              :class="authMode === 'register' ? 'bg-white shadow text-slate-900' : 'text-slate-500'"
+              class="flex-1 py-2 rounded-lg text-sm font-medium transition">Registro</button>
+          </div>
+
+          <div v-if="authError" class="mb-4 flex gap-2 p-3 rounded-lg bg-red-50 text-red-800 text-sm">
+            <span class="shrink-0">❌</span><span>{{ authError }}</span>
+          </div>
+          <div v-if="authSuccess" class="mb-4 flex gap-2 p-3 rounded-lg bg-emerald-50 text-emerald-800 text-sm">
+            <span class="shrink-0">✅</span><span>{{ authSuccess }}</span>
+          </div>
+
+          <form v-if="authMode === 'login'" @submit.prevent="signIn" class="space-y-4">
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">Email</label>
+              <input v-model="authForm.email" type="email" required autocomplete="email"
+                class="w-full border border-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">Contraseña</label>
+              <input v-model="authForm.password" type="password" required autocomplete="current-password"
+                class="w-full border border-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-amber-500 outline-none" />
+            </div>
+            <button type="submit" :disabled="authSubmitting"
+              class="w-full flex items-center justify-center gap-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white font-semibold py-3 rounded-xl transition">
+              <span v-if="authSubmitting" class="animate-pulse">⏳</span>
+              <span>{{ authSubmitting ? 'Entrando…' : 'Entrar' }}</span>
+            </button>
+          </form>
+
+          <form v-else @submit.prevent="signUp" class="space-y-4">
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">Email</label>
+              <input v-model="authForm.email" type="email" required class="w-full border border-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-amber-500 outline-none" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">Contraseña</label>
+              <input v-model="authForm.password" type="password" required minlength="6" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-amber-500 outline-none" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">Usuario (opcional)</label>
+              <input v-model="authForm.username" type="text" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 outline-none" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">Nombre completo</label>
+              <input v-model="authForm.full_name" type="text" class="w-full border border-slate-200 rounded-xl px-4 py-2.5 outline-none" />
+            </div>
+            <button type="submit" :disabled="authSubmitting"
+              class="w-full bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white font-semibold py-3 rounded-xl transition">
+              {{ authSubmitting ? 'Creando…' : 'Crear cuenta' }}
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- LAYOUT DASHBOARD: /#/dashboard, /#/recipes, … -->
+    <div v-else class="flex h-screen overflow-hidden bg-slate-50">
+      <div v-if="isSidebarOpen" @click="closeSidebar"
+        class="fixed inset-0 bg-slate-900/60 z-40 lg:hidden backdrop-blur-sm" aria-hidden="true"></div>
+
+      <aside
+        class="fixed lg:static inset-y-0 left-0 z-50 w-64 max-w-[85vw] shrink-0 bg-slate-900 text-slate-300 flex flex-col border-r border-slate-800 transform transition-transform duration-300 ease-in-out lg:translate-x-0"
+        :class="isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'"
+        :aria-hidden="!isSidebarOpen">
+        <div class="p-5 border-b border-slate-800 flex items-start justify-between gap-2">
+          <div class="flex items-center gap-3 min-w-0">
+            <div class="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center border border-amber-500/30 shrink-0">
+              <span class="text-xl">🍳</span>
+            </div>
+            <div class="min-w-0">
+              <p class="font-semibold text-white text-sm leading-tight truncate">Kitchen App</p>
+              <p class="text-xs text-slate-500">Panel principal</p>
+            </div>
+          </div>
+          <button type="button" @click="closeSidebar" class="lg:hidden p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800" aria-label="Cerrar menú">
+            <span class="text-lg">✕</span>
+          </button>
+        </div>
+
+        <nav class="flex-1 overflow-y-auto p-3 space-y-0.5">
+          <button v-for="item in navItems" :key="item.route" type="button"
+            :class="navLinkClass(item.route)" @click="navigateTo(item.route)">
+            <span class="text-lg w-6 text-center shrink-0" aria-hidden="true">{{ item.emoji }}</span>
+            <span>{{ item.label }}</span>
+          </button>
+        </nav>
+
+        <div class="p-4 border-t border-slate-800">
+          <p class="text-xs text-slate-500 truncate mb-1">{{ userEmail }}</p>
+          <p v-if="profile" class="text-sm text-slate-300 truncate mb-3">@{{ profile.username }}</p>
+          <button type="button" @click="signOut"
+            class="w-full flex items-center justify-center gap-2 text-sm text-red-400 hover:text-red-300 py-2 rounded-lg hover:bg-slate-800 transition">
+            <span>🚪</span> Salir
+          </button>
+        </div>
+      </aside>
+
+      <div class="flex-1 flex flex-col min-w-0 overflow-hidden w-full">
+        <header class="shrink-0 h-14 bg-white border-b border-slate-200 px-4 sm:px-6 flex items-center gap-3">
+          <button type="button" @click="toggleSidebar"
+            class="lg:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50"
+            aria-label="Abrir menú">
+            <span class="text-xl leading-none">☰</span>
+          </button>
+          <h2 class="text-base sm:text-lg font-semibold text-slate-800 truncate flex-1">{{ pageTitle }}</h2>
+          <span v-if="sessionSyncing" class="text-xs text-slate-400 flex items-center gap-1 shrink-0">
+            <span class="animate-pulse">🔄</span>
+            <span class="hidden sm:inline">Sincronizando</span>
+          </span>
+        </header>
+
+        <main class="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8">
+          <div v-if="profileError" class="mb-4 flex flex-wrap items-center gap-3 p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-sm">
+            <span class="text-lg shrink-0">⚠️</span>
+            <span class="flex-1 min-w-[12rem]">Perfil: {{ profileError }}</span>
+            <button type="button" @click="retrySyncProfile" :disabled="sessionSyncing"
+              class="shrink-0 text-sm font-medium px-3 py-1.5 rounded-lg bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-60">
+              Reintentar
+            </button>
+          </div>
+
+          <!-- Dashboard home -->
+          <section v-show="currentRoute === 'dashboard'" class="max-w-6xl w-full space-y-6">
+            <div class="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm">
+              <h3 class="text-xl font-semibold text-slate-900">Bienvenido de nuevo</h3>
+              <p class="text-slate-600 mt-2">Usa el menú para crear recetas, explorar, favoritos o ver valores nutricionales.</p>
+              <div class="grid sm:grid-cols-2 gap-3 mt-6">
+                <button type="button" @click="navigateTo('my-recipes')" class="flex items-center gap-3 p-4 rounded-xl border border-slate-200 hover:border-orange-300 hover:bg-orange-50/50 text-left transition">
+                  <span class="text-2xl">📖</span>
+                  <span class="font-medium text-sm">Mis recetas</span>
+                </button>
+                <button type="button" @click="navigateTo('recipes')" class="flex items-center gap-3 p-4 rounded-xl border border-slate-200 hover:border-orange-300 hover:bg-orange-50/50 text-left transition">
+                  <span class="text-2xl">➕</span>
+                  <span class="font-medium text-sm">Nueva receta</span>
+                </button>
+                <button type="button" @click="navigate('explore')" class="flex items-center gap-3 p-4 rounded-xl border border-slate-200 hover:border-amber-300 hover:bg-amber-50/50 text-left transition">
+                  <span class="text-2xl">🔍</span>
+                  <span class="font-medium text-sm">Explorar</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="space-y-3">
+              <div class="flex items-center justify-between gap-3">
+                <h4 class="text-lg font-semibold text-slate-900">Recetas recientes</h4>
+                <button type="button" @click="navigate('explore')" class="text-sm font-medium text-orange-600 hover:underline">Ver todas</button>
+              </div>
+              <p v-if="recipesLoading" class="flex items-center gap-2 text-slate-500 text-sm py-8 justify-center">
+                <span class="animate-pulse text-orange-500">⏳</span>
+                Cargando recetas…
+              </p>
+              <p v-else-if="!recipes.length" class="text-center text-slate-500 py-12 bg-white rounded-2xl border border-slate-200">
+                Aún no hay recetas publicadas. Crea la primera desde «Nueva receta».
+              </p>
+              <ul v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                <li v-for="r in recipes" :key="r.id"
+                  class="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm hover:border-orange-200 transition-colors cursor-pointer"
+                  @click="openRecipeDetail(r)">
+                  <div v-if="hasRecipeImage(r.image_url)" class="w-full h-40 overflow-hidden">
+                    <img :src="r.image_url" :alt="r.title" class="w-full h-40 object-cover" loading="lazy" />
+                  </div>
+                  <div v-else class="w-full h-28 flex items-center justify-center bg-slate-50">
+                    <span class="text-3xl">🍽️</span>
+                  </div>
+                  <div class="p-4">
+                    <h5 class="font-semibold text-slate-900">{{ r.title }}</h5>
+                    <p class="text-sm text-slate-600 mt-1">
+                      <span class="inline-flex items-center rounded-md bg-orange-50 px-2 py-0.5 text-orange-800 font-medium">{{ r.category }}</span>
+                      <span class="ml-1">{{ r.cooking_time }} min</span>
+                    </p>
+                    <p v-if="r.recipe_ingredients?.length" class="text-xs text-slate-500 mt-2 line-clamp-2">
+                      {{ r.recipe_ingredients.map(i => i.name).join(', ') }}
+                    </p>
+                  </div>
+                </li>
+              </ul>
+            </div>
+          </section>
+
+          <!-- Profile -->
+          <section v-show="currentRoute === 'profile'" class="max-w-2xl">
+            <div class="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm">
+              <div class="flex items-center gap-4 mb-6">
+                <div class="w-14 h-14 rounded-full bg-amber-100 flex items-center justify-center">
+                  <span class="text-3xl">👤</span>
+                </div>
+                <div>
+                  <h3 class="text-lg font-semibold">{{ profile?.full_name || 'Usuario' }}</h3>
+                  <p class="text-slate-500 text-sm">{{ userEmail }}</p>
+                </div>
+              </div>
+              <dl class="grid gap-4 text-sm sm:grid-cols-2">
+                <div class="p-3 rounded-lg bg-slate-50"><dt class="text-slate-500">Username</dt><dd class="font-mono mt-1">@{{ profile?.username || '—' }}</dd></div>
+                <div class="p-3 rounded-lg bg-slate-50"><dt class="text-slate-500">ID Auth</dt><dd class="font-mono text-xs mt-1 break-all">{{ currentUserId }}</dd></div>
+              </dl>
+              <p v-if="!profile && profileError" class="text-sm text-amber-800 mt-4">{{ profileError }}</p>
+              <button v-if="!profile" type="button" @click="retrySyncProfile" :disabled="sessionSyncing"
+                class="mt-4 btn-secondary text-sm">
+                {{ sessionSyncing ? 'Sincronizando…' : 'Sincronizar perfil' }}
+              </button>
+              <p class="text-xs text-slate-400 mt-6">El perfil se crea automáticamente al iniciar sesión si no existe en la tabla profiles.</p>
+            </div>
+          </section>
+
+          <!-- US-05 / US-07 Mis recetas -->
+          <section v-show="currentRoute === 'my-recipes'" class="max-w-6xl w-full">
+            <div class="flex flex-wrap items-center justify-between gap-4 mb-6">
+              <div>
+                <h3 class="text-xl font-semibold text-slate-900">Mis recetas</h3>
+                <p class="text-sm text-slate-500">Recetas creadas por ti · editar o eliminar</p>
+              </div>
+              <button type="button" @click="navigateTo('recipes')"
+                class="inline-flex items-center gap-2 rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-semibold px-4 py-2.5 text-sm shadow-sm">
+                <span>➕</span> Nueva receta
+              </button>
+            </div>
+            <p v-if="myRecipesLoading" class="text-slate-500 py-12 text-center">Cargando tus recetas…</p>
+            <p v-else-if="!myRecipesList.length" class="bg-white rounded-2xl border p-12 text-center text-slate-500">
+              Aún no has publicado recetas. ¡Crea la primera!
+            </p>
+            <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+              <article v-for="r in myRecipesList" :key="r.id"
+                class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+                <div v-if="hasRecipeImage(r.image_url)" class="w-full h-48 overflow-hidden bg-slate-100">
+                  <img :src="r.image_url" :alt="r.title" class="w-full h-48 object-cover" loading="lazy" />
+                </div>
+                <div v-else class="w-full h-32 flex items-center justify-center bg-gradient-to-br from-orange-50 to-slate-50">
+                  <span class="text-3xl">🖼️</span>
+                </div>
+                <div class="p-5 flex-1">
+                  <span class="text-xs font-medium text-orange-700 bg-orange-50 px-2 py-0.5 rounded">{{ r.category }}</span>
+                  <h4 class="font-semibold text-slate-900 mt-2">{{ r.title }}</h4>
+                  <p class="text-sm text-slate-500 mt-1 line-clamp-2">{{ r.description || 'Sin descripción' }}</p>
+                  <p class="text-xs text-slate-400 mt-2">{{ r.cooking_time }} min · {{ r.calories || 0 }} kcal</p>
+                </div>
+                <div class="px-5 py-4 border-t border-slate-100 flex flex-wrap gap-2">
+                  <button type="button" @click="editRecipe(r)"
+                    class="flex-1 min-w-[5rem] inline-flex justify-center items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                    <span>✏️</span> Editar
+                  </button>
+                  <button type="button" @click="toggleShoppingRecipe(r)"
+                    class="inline-flex items-center justify-center rounded-lg border px-3 py-2 text-sm"
+                    :class="isRecipeInShopping(r.id) ? 'border-orange-300 bg-orange-50 text-orange-700' : 'border-slate-300 text-slate-600'">
+                    <span>🛒</span>
+                  </button>
+                  <button type="button" @click="openRecipeDetail(r)" class="inline-flex items-center justify-center rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50" title="Ver detalle">
+                    <span>👁️</span>
+                  </button>
+                  <button type="button" @click="shareRecipe(r)" class="inline-flex items-center justify-center rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50" title="Compartir">
+                    <span>🔗</span>
+                  </button>
+                  <button type="button" @click="requestDeleteRecipe(r)"
+                    class="inline-flex items-center justify-center rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 hover:bg-red-100">
+                    <span>🗑️</span>
+                  </button>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <!-- US-01 Nueva / editar receta -->
+          <section v-show="currentRoute === 'recipes'" class="max-w-5xl w-full">
+            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+              <div class="px-6 py-5 md:px-8 border-b border-slate-100 bg-gradient-to-r from-orange-50 to-white flex flex-wrap items-center justify-between gap-3">
+                <div class="flex items-center gap-3">
+                  <span class="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-100 text-orange-600">
+                    <span class="text-xl">👨‍🍳</span>
+                  </span>
+                  <div>
+                    <h3 class="text-lg font-semibold text-slate-900">{{ isEditingRecipe ? 'Editar receta' : 'Nueva receta' }}</h3>
+                    <p class="text-sm text-slate-500">{{ isEditingRecipe ? 'Modifica y guarda los cambios' : 'Completa los datos y publica tu receta' }}</p>
+                  </div>
+                </div>
+                <button v-if="isEditingRecipe" type="button" @click="cancelEditRecipe"
+                  class="text-sm font-medium text-slate-600 hover:text-slate-900 underline">Cancelar edición</button>
+              </div>
+
+              <div class="p-6 md:p-8">
+                <div v-if="formMessage" class="mb-6 p-4 rounded-lg text-sm border"
+                  :class="formMessageType === 'success'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    : 'bg-red-50 border-red-200 text-red-800'">{{ formMessage }}</div>
+
+                <form @submit.prevent="saveRecipe" class="space-y-10">
+                  <!-- Datos generales -->
+                  <fieldset class="space-y-6">
+                    <legend class="text-sm font-semibold text-slate-900 uppercase tracking-wide">Datos generales</legend>
+
+                    <div class="grid grid-cols-1 gap-6">
+                      <div>
+                        <label for="recipe-title" class="block text-sm font-medium text-slate-700 mb-1.5">Título *</label>
+                        <input id="recipe-title" v-model="form.title" type="text" required
+                          class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-all focus:ring-2 focus:ring-orange-500 focus:border-orange-500" />
+                      </div>
+                      <div>
+                        <label for="recipe-desc" class="block text-sm font-medium text-slate-700 mb-1.5">Descripción</label>
+                        <textarea id="recipe-desc" v-model="form.description" rows="3"
+                          class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-all resize-y min-h-[5rem] focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                          placeholder="Describe brevemente tu receta…"></textarea>
+                      </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      <div>
+                        <label for="recipe-time" class="block text-sm font-medium text-slate-700 mb-1.5">Tiempo (min) *</label>
+                        <input id="recipe-time" v-model.number="form.cooking_time" type="number" min="1" required
+                          class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-all focus:ring-2 focus:ring-orange-500 focus:border-orange-500" />
+                      </div>
+                      <div>
+                        <label for="recipe-category" class="block text-sm font-medium text-slate-700 mb-1.5">Categoría *</label>
+                        <select id="recipe-category" v-model="form.category" required
+                          class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-all focus:ring-2 focus:ring-orange-500 focus:border-orange-500">
+                          <option value="">Seleccionar…</option>
+                          <option v-for="c in categories" :key="c" :value="c">{{ c }}</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label for="recipe-cuisine" class="block text-sm font-medium text-slate-700 mb-1.5">Tipo de cocina</label>
+                        <select id="recipe-cuisine" v-model="form.cuisine_type"
+                          class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-all focus:ring-2 focus:ring-orange-500 focus:border-orange-500">
+                          <option value="">Opcional</option>
+                          <option v-for="t in cuisineTypes" :key="t" :value="t">{{ t }}</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label for="recipe-calories" class="block text-sm font-medium text-slate-700 mb-1.5">Calorías</label>
+                        <input id="recipe-calories" v-model.number="form.calories" type="number" min="0"
+                          class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-all focus:ring-2 focus:ring-orange-500 focus:border-orange-500" />
+                      </div>
+                      <div>
+                        <label for="recipe-protein" class="block text-sm font-medium text-slate-700 mb-1.5">Proteínas (g)</label>
+                        <input id="recipe-protein" v-model.number="form.protein" type="number" min="0"
+                          class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-all focus:ring-2 focus:ring-orange-500 focus:border-orange-500" />
+                      </div>
+                      <div class="md:col-span-2 lg:col-span-3">
+                        <label for="recipe-image" class="block text-sm font-medium text-slate-700 mb-1.5">URL de la foto de la receta</label>
+                        <input id="recipe-image" v-model="form.image_url" type="url"
+                          class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-all focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                          placeholder="https://ejemplo.com/foto.jpg" />
+                        <p class="text-xs text-slate-500 mt-1.5">Pega un enlace público (http/https) a la imagen de portada.</p>
+                        <div v-if="formImagePreviewValid" class="mt-4 rounded-xl overflow-hidden border border-slate-200 shadow-sm max-w-md">
+                          <img :src="form.image_url" alt="Vista previa" class="w-full h-48 object-cover" />
+                        </div>
+                        <div v-else-if="form.image_url?.trim()" class="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">URL no válida. Usa http:// o https://</div>
+                        <div v-else class="mt-4 w-full max-w-md h-36 rounded-xl border border-dashed border-slate-300 flex items-center justify-center bg-slate-50">
+                          <span class="text-3xl">🖼️</span>
+                        </div>
+                      </div>
+                    </div>
+                  </fieldset>
+
+                  <!-- Ingredientes -->
+                  <fieldset class="space-y-4">
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                      <legend class="text-sm font-semibold text-slate-900 uppercase tracking-wide">Ingredientes</legend>
+                      <button type="button" @click="addIngredient"
+                        class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-100 transition-colors">
+                        <span>➕</span>
+                        Añadir ingrediente
+                      </button>
+                    </div>
+
+                    <div class="hidden md:grid grid-cols-12 gap-3 px-1 text-xs font-medium text-slate-500 uppercase tracking-wide">
+                      <span class="col-span-5">Nombre</span>
+                      <span class="col-span-2">Cantidad</span>
+                      <span class="col-span-3">Unidad</span>
+                      <span class="col-span-2 text-center">Acción</span>
+                    </div>
+
+                    <div v-for="(ing, i) in ingredients" :key="'i'+i"
+                      class="grid grid-cols-1 md:grid-cols-12 gap-3 items-center p-4 md:p-3 rounded-xl border border-slate-200 bg-slate-50/50">
+                      <div class="md:col-span-5">
+                        <label class="md:sr-only text-sm font-medium text-slate-700 mb-1.5">Nombre</label>
+                        <input v-model="ing.name" type="text" placeholder="Ej. Harina" required
+                          class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm shadow-sm outline-none transition-all focus:ring-2 focus:ring-orange-500 focus:border-orange-500" />
+                      </div>
+                      <div class="md:col-span-2">
+                        <label class="md:sr-only text-sm font-medium text-slate-700 mb-1.5">Cantidad</label>
+                        <input v-model.number="ing.amount" type="number" step="0.01" min="0.01" placeholder="0" required
+                          class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm shadow-sm outline-none transition-all focus:ring-2 focus:ring-orange-500 focus:border-orange-500" />
+                      </div>
+                      <div class="md:col-span-3">
+                        <label class="md:sr-only text-sm font-medium text-slate-700 mb-1.5">Unidad</label>
+                        <input v-model="ing.unit" type="text" placeholder="g, ml, taza…" required
+                          class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm shadow-sm outline-none transition-all focus:ring-2 focus:ring-orange-500 focus:border-orange-500" />
+                      </div>
+                      <div class="md:col-span-2 flex justify-end">
+                        <button v-if="ingredients.length > 1" type="button" @click="removeIngredient(i)"
+                          class="inline-flex items-center justify-center gap-1 rounded-lg border border-red-200 bg-white px-3 py-2.5 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
+                          title="Eliminar ingrediente">
+                          <span>🗑️</span>
+                          <span class="md:hidden">Eliminar</span>
+                        </button>
+                      </div>
+                    </div>
+                  </fieldset>
+
+                  <!-- Pasos -->
+                  <fieldset class="space-y-4">
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                      <legend class="text-sm font-semibold text-slate-900 uppercase tracking-wide">Pasos de preparación</legend>
+                      <button type="button" @click="addStep"
+                        class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-100 transition-colors">
+                        <span>➕</span>
+                        Añadir paso
+                      </button>
+                    </div>
+
+                    <div v-for="(step, i) in steps" :key="'s'+i" class="flex gap-4 items-start">
+                      <div class="flex-shrink-0 flex h-10 w-10 items-center justify-center rounded-full bg-orange-500 text-white text-sm font-semibold shadow-sm mt-1"
+                        aria-hidden="true">{{ i + 1 }}</div>
+                      <div class="flex-1 min-w-0 flex gap-2">
+                        <textarea v-model="step.instruction" rows="3" required
+                          class="flex-1 w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-all resize-y min-h-[4.5rem] focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                          :placeholder="'Describe el paso ' + (i + 1) + '…'"></textarea>
+                        <button v-if="steps.length > 1" type="button" @click="removeStep(i)"
+                          class="flex-shrink-0 self-start inline-flex h-10 w-10 items-center justify-center rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
+                          title="Eliminar paso">
+                          <span>🗑️</span>
+                        </button>
+                      </div>
+                    </div>
+                  </fieldset>
+
+                  <div class="pt-2 border-t border-slate-100">
+                    <button type="submit" :disabled="formLoading"
+                      class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-orange-500 hover:bg-orange-600 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold text-base px-6 py-3.5 shadow-md transition-colors">
+                      <span v-if="formLoading" class="animate-pulse">⏳</span>
+                      <span v-else>💾</span>
+                      {{ formLoading ? 'Guardando…' : 'Guardar receta' }}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </section>
+
+          <!-- US-02 Buscar recetas -->
+          <section v-show="currentRoute === 'explore'" class="max-w-6xl w-full space-y-6">
+            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+              <div class="px-6 py-5 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white">
+                <div class="flex items-center gap-3">
+                  <span class="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-100 text-orange-600">
+                    <span class="text-xl">🔍</span>
+                  </span>
+                  <div>
+                    <h3 class="text-lg font-semibold text-slate-900">Buscar recetas</h3>
+                    <p class="text-sm text-slate-500">Filtra por nombre, ingrediente o categoría</p>
+                  </div>
+                </div>
+              </div>
+
+              <div class="p-6">
+                <p v-if="searchMessage" class="mb-4 text-sm text-amber-900 bg-amber-50 border border-amber-200 px-4 py-3 rounded-lg">{{ searchMessage }}</p>
+
+                <form @submit.prevent="searchRecipes" class="space-y-6">
+                  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div>
+                      <label for="search-title" class="block text-sm font-medium text-slate-700 mb-1.5">Nombre</label>
+                      <input id="search-title" v-model="search.title" type="text" placeholder="Ej. Tacos"
+                        class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-all focus:ring-2 focus:ring-orange-500 focus:border-orange-500" />
+                    </div>
+                    <div>
+                      <label for="search-ingredient" class="block text-sm font-medium text-slate-700 mb-1.5">Ingrediente</label>
+                      <input id="search-ingredient" v-model="search.ingredient" type="text" placeholder="Ej. Tomate"
+                        class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-all focus:ring-2 focus:ring-orange-500 focus:border-orange-500" />
+                    </div>
+                    <div>
+                      <label for="search-category" class="block text-sm font-medium text-slate-700 mb-1.5">Categoría</label>
+                      <select id="search-category" v-model="search.category"
+                        class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-all focus:ring-2 focus:ring-orange-500 focus:border-orange-500">
+                        <option value="">Todas</option>
+                        <option v-for="c in categories" :key="c" :value="c">{{ c }}</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label for="search-cuisine" class="block text-sm font-medium text-slate-700 mb-1.5">Tipo de cocina</label>
+                      <select id="search-cuisine" v-model="search.cuisine_type"
+                        class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-all focus:ring-2 focus:ring-orange-500 focus:border-orange-500">
+                        <option value="">Todos</option>
+                        <option v-for="t in cuisineTypes" :key="t" :value="t">{{ t }}</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div class="flex flex-col-reverse sm:flex-row sm:justify-end gap-3 pt-2">
+                    <button type="button" @click="loadAllRecipes"
+                      class="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium px-5 py-2.5 text-sm transition-colors">
+                      <span>📋</span>
+                      Ver todas
+                    </button>
+                    <button type="button" @click="clearSearch"
+                      class="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium px-5 py-2.5 text-sm transition-colors">
+                      <span>🧹</span>
+                      Limpiar
+                    </button>
+                    <button type="submit" :disabled="searchLoading || recipesLoading"
+                      class="inline-flex items-center justify-center gap-2 rounded-lg bg-orange-500 hover:bg-orange-600 disabled:opacity-60 text-white font-semibold px-6 py-2.5 text-sm shadow-sm transition-colors">
+                      <span v-if="searchLoading" class="animate-pulse">⏳</span>
+                      <span v-else>🔍</span>
+                      {{ searchLoading ? 'Buscando…' : 'Buscar' }}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+
+            <div class="space-y-3">
+              <p v-if="searchLoading || recipesLoading" class="flex items-center gap-2 text-slate-500 text-sm py-8 justify-center">
+                <span class="animate-pulse text-orange-500">⏳</span>
+                Cargando recetas…
+              </p>
+              <p v-else-if="hasSearched && !exploreList.length" class="text-center text-slate-500 py-12 bg-white rounded-2xl border border-slate-200">
+                No se encontraron recetas con esos filtros.
+              </p>
+              <ul v-else-if="exploreList.length" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <li v-for="r in exploreList" :key="r.id"
+                  class="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm hover:border-orange-200 transition-colors flex flex-col">
+                  <div v-if="hasRecipeImage(r.image_url)" class="w-full h-48 overflow-hidden cursor-pointer" @click="openRecipeDetail(r)">
+                    <img :src="r.image_url" :alt="r.title" class="w-full h-48 object-cover" loading="lazy" />
+                  </div>
+                  <div v-else class="w-full h-36 flex items-center justify-center bg-slate-50 cursor-pointer" @click="openRecipeDetail(r)">
+                    <span class="text-4xl">🖼️</span>
+                  </div>
+                  <div class="p-4 flex-1 flex flex-col">
+                    <h4 class="font-semibold text-slate-900 text-base cursor-pointer hover:text-orange-600" @click="openRecipeDetail(r)">{{ r.title }}</h4>
+                    <p class="text-sm text-slate-600 mt-1.5 flex flex-wrap gap-x-2 gap-y-1">
+                      <span class="inline-flex items-center rounded-md bg-orange-50 px-2 py-0.5 text-orange-800 font-medium">{{ r.category }}</span>
+                      <span>{{ r.cooking_time }} min · {{ r.calories || 0 }} kcal</span>
+                    </p>
+                  <div class="mt-auto pt-4 flex flex-wrap gap-2">
+                    <button type="button" @click="openRecipeDetail(r)" class="text-xs font-medium text-orange-600 hover:underline">Ver detalle</button>
+                  </div>
+                  </div>
+                  <div class="px-4 pb-4 flex gap-2 shrink-0 border-t border-slate-100 mx-4">
+                    <button type="button" @click="shareRecipe(r)" class="p-2.5 rounded-lg border border-slate-200 hover:bg-slate-50" title="Compartir enlace">
+                      <span class="text-lg">🔗</span>
+                    </button>
+                    <button type="button" @click="toggleShoppingRecipe(r)"
+                      class="p-2.5 rounded-lg border transition-colors"
+                      :class="isRecipeInShopping(r.id) ? 'border-orange-300 bg-orange-50 text-orange-600' : 'border-slate-200 hover:bg-slate-50'"
+                      title="Lista de compras">
+                      <span class="text-lg">🛒</span>
+                    </button>
+                    <button type="button" @click="toggleFavorite(r)"
+                      class="p-2.5 rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors"
+                      :title="isFavorite(r.id) ? 'Quitar de favoritos' : 'Añadir a favoritos'">
+                      <span class="text-xl">{{ isFavorite(r.id) ? '❤️' : '🤍' }}</span>
+                    </button>
+                  </div>
+                </li>
+              </ul>
+            </div>
+          </section>
+
+          <!-- US-03 Favoritos -->
+          <section v-show="currentRoute === 'favorites'" class="max-w-4xl w-full">
+            <div class="mb-6">
+              <h3 class="text-xl font-semibold text-slate-900">Mis favoritos</h3>
+              <p class="text-sm text-slate-500">Recetas marcadas con corazón en Explorar</p>
+            </div>
+            <p v-if="favoritesLoading" class="text-slate-500 py-12 text-center">Cargando favoritos…</p>
+            <p v-else-if="!favoritesList.length" class="bg-white rounded-2xl border p-12 text-center text-slate-500">
+              <span class="text-5xl block mx-auto mb-3">💔</span>
+              Sin favoritos. Márcalos en Explorar.
+            </p>
+            <ul v-else class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <li v-for="r in favoritesList" :key="r.id"
+                class="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm flex flex-col">
+                <div v-if="hasRecipeImage(r.image_url)" class="h-40 cursor-pointer" @click="openRecipeDetail(r)">
+                  <img :src="r.image_url" :alt="r.title" class="w-full h-40 object-cover" loading="lazy" />
+                </div>
+                <div v-else class="h-28 flex items-center justify-center bg-slate-50 cursor-pointer" @click="openRecipeDetail(r)">
+                  <span class="text-3xl">🖼️</span>
+                </div>
+                <div class="p-4 flex-1 flex flex-col sm:flex-row sm:items-center gap-3">
+                <div class="flex-1">
+                  <h4 class="font-semibold text-slate-900 cursor-pointer" @click="openRecipeDetail(r)">{{ r.title }}</h4>
+                  <p class="text-sm text-slate-500 mt-1">{{ r.category }} · {{ r.cooking_time }} min</p>
+                </div>
+                <div class="flex gap-2">
+                  <button type="button" @click="shareRecipe(r)" class="p-2.5 rounded-lg border border-slate-200 hover:bg-slate-50" title="Compartir">
+                    <span class="text-lg">🔗</span>
+                  </button>
+                  <button type="button" @click="toggleShoppingRecipe(r)" class="p-2.5 rounded-lg border border-slate-200 hover:bg-slate-50"
+                    :class="isRecipeInShopping(r.id) ? '!border-orange-300 !bg-orange-50' : ''">
+                    <span class="text-lg">🛒</span>
+                  </button>
+                  <button type="button" @click="toggleFavorite(r)" class="p-2.5 rounded-lg text-red-500 hover:bg-red-50">
+                    <span class="text-xl">❤️</span>
+                  </button>
+                </div>
+              </li>
+            </ul>
+          </section>
+
+          <!-- US-04 Nutrition -->
+          <section v-show="currentRoute === 'nutrition'" class="max-w-4xl space-y-4">
+            <div class="bg-white rounded-2xl border p-6 shadow-sm flex flex-wrap gap-4 items-end">
+              <div>
+                <label class="label">Categoría</label>
+                <select v-model="nutritionFilter.category" @change="loadNutrition" class="input w-48">
+                  <option value="">Todas</option><option v-for="c in categories" :key="c" :value="c">{{ c }}</option>
+                </select>
+              </div>
+              <button type="button" @click="loadNutrition" class="btn-secondary flex items-center gap-2"><span>🔄</span> Actualizar</button>
+            </div>
+            <div v-if="nutritionRecipes.length" class="grid sm:grid-cols-3 gap-4">
+              <div class="bg-white rounded-xl border p-4 text-center"><p class="text-2xl font-bold">{{ nutritionStats.count }}</p><p class="text-xs text-slate-500">Recetas</p></div>
+              <div class="bg-white rounded-xl border p-4 text-center"><p class="text-2xl font-bold">{{ nutritionStats.totalCalories }}</p><p class="text-xs text-slate-500">kcal total</p></div>
+              <div class="bg-white rounded-xl border p-4 text-center"><p class="text-2xl font-bold">{{ nutritionStats.totalProtein }}g</p><p class="text-xs text-slate-500">Proteína</p></div>
+            </div>
+            <div class="bg-white rounded-2xl border overflow-hidden shadow-sm">
+              <table class="w-full text-sm">
+                <thead class="bg-slate-50 border-b"><tr>
+                  <th class="text-left p-3 font-medium">Receta</th><th class="text-left p-3">Categoría</th>
+                  <th class="text-right p-3">kcal</th><th class="text-right p-3">Prot.</th>
+                </tr></thead>
+                <tbody>
+                  <tr v-for="r in nutritionRecipes" :key="r.id" class="border-b border-slate-100">
+                    <td class="p-3 font-medium">{{ r.title }}</td><td class="p-3 text-slate-600">{{ r.category }}</td>
+                    <td class="p-3 text-right">{{ r.calories ?? 0 }}</td><td class="p-3 text-right">{{ r.protein ?? 0 }}g</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p v-if="!nutritionLoading && !nutritionRecipes.length" class="p-8 text-center text-slate-500">No hay datos.</p>
+            </div>
+          </section>
+
+          <!-- US-06 Lista de compras -->
+          <section v-show="currentRoute === 'shopping'" class="max-w-6xl w-full space-y-6">
+            <div class="flex flex-wrap justify-between gap-4">
+              <div>
+                <h3 class="text-xl font-semibold text-slate-900">Lista de compras</h3>
+                <p class="text-sm text-slate-500">Selecciona recetas y consolida ingredientes automáticamente</p>
+              </div>
+              <button type="button" @click="clearShoppingList"
+                class="text-sm font-medium text-red-600 hover:text-red-800">Vaciar lista</button>
+            </div>
+            <div class="grid lg:grid-cols-2 gap-6">
+              <div class="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                <h4 class="font-semibold text-slate-800 mb-4">Seleccionar recetas</h4>
+                <p v-if="shoppingPickLoading" class="text-slate-500 text-sm">Cargando…</p>
+                <ul v-else class="space-y-2 max-h-80 overflow-y-auto">
+                  <li v-for="r in shoppingPickList" :key="r.id"
+                    class="flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors"
+                    :class="isRecipeInShopping(r.id) ? 'border-orange-400 bg-orange-50' : 'border-slate-200 hover:bg-slate-50'"
+                    @click="toggleShoppingRecipe(r)">
+                    <input type="checkbox" :checked="isRecipeInShopping(r.id)" class="rounded text-orange-500" @click.stop="toggleShoppingRecipe(r)" />
+                    <span class="text-sm font-medium text-slate-800 flex-1">{{ r.title }}</span>
+                  </li>
+                </ul>
+              </div>
+              <div class="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+                <h4 class="font-semibold text-slate-800 mb-4">Ingredientes consolidados</h4>
+                <p v-if="!shoppingSelectedIds.length" class="text-slate-500 text-sm">Marca recetas a la izquierda para ver la lista.</p>
+                <ul v-else-if="!consolidatedShoppingList.length" class="text-slate-500 text-sm">Sin ingredientes en las recetas seleccionadas.</ul>
+                <ul v-else class="space-y-3">
+                  <li v-for="(item, idx) in consolidatedShoppingList" :key="idx"
+                    class="flex justify-between gap-4 p-3 rounded-lg bg-slate-50 border border-slate-100">
+                    <div>
+                      <p class="font-medium text-slate-900">{{ item.name }}</p>
+                      <p class="text-xs text-slate-500 mt-0.5">{{ item.recipeTitles.join(', ') }}</p>
+                    </div>
+                    <p class="font-semibold text-orange-700 whitespace-nowrap">{{ item.amount }} {{ item.unit }}</p>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </section>
+
+          <!-- US-08 / US-09 Colecciones -->
+          <section v-show="currentRoute === 'collections'" class="max-w-4xl w-full space-y-6">
+            <div>
+              <h3 class="text-xl font-semibold text-slate-900">Mis colecciones</h3>
+              <p class="text-sm text-slate-500">Libros de cocina personalizados (US-08 / US-09)</p>
+            </div>
+            <form @submit.prevent="createCollection" class="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4">
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1.5">Nombre del libro *</label>
+                <input v-model="collectionForm.name" type="text" required
+                  class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm shadow-sm focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none" />
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1.5">Descripción</label>
+                <textarea v-model="collectionForm.description" rows="2"
+                  class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm shadow-sm focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none resize-y"></textarea>
+              </div>
+              <button type="submit" :disabled="collectionSaving"
+                class="rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-semibold px-5 py-2.5 text-sm disabled:opacity-60">
+                {{ collectionSaving ? 'Creando…' : 'Crear colección' }}
+              </button>
+            </form>
+            <p v-if="collectionsLoading" class="text-slate-500">Cargando colecciones…</p>
+            <div class="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+              <h4 class="font-semibold text-slate-800 mb-3">Añadir receta a una colección</h4>
+              <div class="flex flex-col sm:flex-row gap-3">
+                <select v-model="collectionPickerRecipeId"
+                  class="flex-1 bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm shadow-sm focus:ring-2 focus:ring-orange-500 outline-none">
+                  <option value="">Elige una de tus recetas…</option>
+                  <option v-for="r in myRecipesList" :key="r.id" :value="r.id">{{ r.title }}</option>
+                </select>
+                <select v-model="selectedCollectionId"
+                  class="flex-1 bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm shadow-sm focus:ring-2 focus:ring-orange-500 outline-none">
+                  <option value="">Elige colección…</option>
+                  <option v-for="c in collectionsList" :key="c.id" :value="c.id">{{ c.name }}</option>
+                </select>
+                <button type="button" @click="addRecipeToCollection(selectedCollectionId, collectionPickerRecipeId)"
+                  class="rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-semibold px-4 py-2.5 text-sm whitespace-nowrap">
+                  Añadir
+                </button>
+              </div>
+              <p class="text-xs text-slate-500 mt-2">US-09: agrupa tus recetas en carpetas (Supabase + respaldo local).</p>
+            </div>
+            <div v-if="collectionsList.length" class="grid sm:grid-cols-2 gap-4 mt-6">
+              <div v-for="c in collectionsList" :key="c.id" class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+                <h4 class="font-semibold text-slate-900">{{ c.name }}</h4>
+                <p class="text-sm text-slate-500 mt-1">{{ c.description || 'Sin descripción' }}</p>
+                <p class="text-xs text-orange-700 mt-3">{{ getCollectionRecipeIds(c.id).length }} receta(s) en carpeta</p>
+              </div>
+            </div>
+            <p v-else class="text-slate-500 text-sm">No hay colecciones. Ejecuta sql/collections_reviews.sql si la tabla no existe.</p>
+          </section>
+
+          <!-- US-10 Reseñas -->
+          <section v-show="currentRoute === 'share'" class="max-w-4xl w-full space-y-6">
+            <div>
+              <h3 class="text-xl font-semibold text-slate-900">Reseñas y valoraciones</h3>
+              <p class="text-sm text-slate-500">Califica recetas de 1 a 5 estrellas (US-10)</p>
+            </div>
+            <div class="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4">
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1.5">ID de receta (UUID)</label>
+                <input v-model="reviewForm.recipe_id" type="text" placeholder="Pega el ID desde Explorar o Mis recetas"
+                  class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm shadow-sm focus:ring-2 focus:ring-orange-500 outline-none" />
+              </div>
+              <div>
+                <span class="block text-sm font-medium text-slate-700 mb-2">Valoración</span>
+                <div class="flex gap-1">
+                  <button v-for="n in 5" :key="n" type="button" @click="setReviewStars(n)"
+                    class="p-1 rounded hover:scale-110 transition-transform">
+                    <span class="text-3xl">{{ n <= reviewForm.rating ? '⭐' : '☆' }}</span>
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1.5">Comentario</label>
+                <textarea v-model="reviewForm.comment" rows="3"
+                  class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm shadow-sm focus:ring-2 focus:ring-orange-500 outline-none resize-y"></textarea>
+              </div>
+              <button type="button" @click="submitReview" :disabled="reviewSubmitting"
+                class="rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-semibold px-5 py-2.5 text-sm disabled:opacity-60">
+                {{ reviewSubmitting ? 'Guardando…' : 'Publicar reseña' }}
+              </button>
+            </div>
+            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+              <div class="px-6 py-4 border-b flex flex-wrap gap-3 items-end">
+                <div class="flex-1 min-w-[12rem]">
+                  <label class="block text-sm font-medium text-slate-700 mb-1.5">Filtrar por receta</label>
+                  <input v-model="reviewsRecipeId" @change="loadReviewsForRecipe" type="text" placeholder="UUID opcional"
+                    class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2.5 text-sm shadow-sm focus:ring-2 focus:ring-orange-500 outline-none" />
+                </div>
+                <button type="button" @click="loadReviewsForRecipe" class="rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium px-4 py-2.5 text-sm">Actualizar</button>
+              </div>
+              <p v-if="reviewsLoading" class="p-8 text-center text-slate-500">Cargando reseñas…</p>
+              <ul v-else-if="reviewsList.length" class="divide-y divide-slate-100">
+                <li v-for="rev in reviewsList" :key="rev.id" class="p-5">
+                  <div class="flex gap-1 mb-2">
+                    <span v-for="n in 5" :key="n" class="text-base">{{ n <= rev.rating ? '⭐' : '☆' }}</span>
+                  </div>
+                  <p class="text-sm text-slate-700">{{ rev.comment || 'Sin comentario' }}</p>
+                  <p class="text-xs text-slate-400 mt-2 font-mono">Receta: {{ rev.recipe_id }}</p>
+                </li>
+              </ul>
+              <p v-else class="p-8 text-center text-slate-500">No hay reseñas aún.</p>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <style>
+    /* Utilidades legacy (perfil, nutrición): el CDN de Tailwind no compila @apply en <style> */
+    .label { display: block; font-size: 0.875rem; font-weight: 500; color: #334155; margin-bottom: 0.375rem; }
+    .input {
+      width: 100%; background: #fff; border: 1px solid #cbd5e1; border-radius: 0.5rem;
+      padding: 0.625rem 1rem; font-size: 0.875rem; box-shadow: 0 1px 2px rgb(0 0 0 / 0.05);
+      outline: none; transition: all 0.15s;
+    }
+    .input:focus { border-color: #f97316; box-shadow: 0 0 0 2px rgb(249 115 22 / 0.25); }
+    .btn-primary {
+      display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+      background: #f97316; color: #fff; font-weight: 600; padding: 0.625rem 1.25rem;
+      border-radius: 0.5rem; transition: background 0.15s;
+    }
+    .btn-primary:hover { background: #ea580c; }
+    .btn-primary:disabled { opacity: 0.6; }
+    .btn-secondary {
+      display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+      border: 1px solid #e2e8f0; background: #fff; color: #334155; font-weight: 500;
+      padding: 0.625rem 1.25rem; border-radius: 0.5rem; transition: background 0.15s;
+    }
+    .btn-secondary:hover { background: #f8fafc; }
+  </style>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="supabase-config.js"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kitchen App — Gestión de Recetas</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-stone-100 text-stone-900 h-screen overflow-hidden">
+  <div id="app" class="flex h-screen">
+    <aside class="w-64 shrink-0 bg-white border-r border-stone-200 flex flex-col shadow-sm">
+      <div class="p-4 border-b border-stone-200">
+        <h1 class="text-lg font-bold text-amber-800">Kitchen App</h1>
+        <p class="text-xs text-stone-500">SDD · Supabase + Vue</p>
+      </div>
+      <nav class="flex-1 overflow-y-auto p-3 space-y-1">
+        <button
+          v-for="item in navItems"
+          :key="item.id"
+          type="button"
+          :class="navButtonClass(item)"
+          :disabled="item.requiresAuth && !isAuthenticated"
+          @click="setActiveView(item.id)"
+        >
+          <span class="text-lg shrink-0">{{ item.icon }}</span>
+          <span class="leading-tight">{{ item.label }}</span>
+        </button>
+      </nav>
+      <div v-if="isAuthenticated" class="p-4 border-t border-stone-200 bg-stone-50 text-sm">
+        <p class="text-stone-600 truncate font-medium" :title="userEmail">{{ userEmail }}</p>
+        <p v-if="profile" class="text-xs text-stone-500 truncate">@{{ profile.username }}</p>
+        <button type="button" @click="signOut" class="mt-2 text-red-600 hover:text-red-800 font-medium">
+          Cerrar sesión
+        </button>
+      </div>
+    </aside>
+
+    <main class="flex-1 overflow-y-auto p-6 md:p-8">
+      <div v-if="authLoading" class="flex items-center justify-center min-h-[50vh]">
+        <p class="text-stone-500">Cargando sesión…</p>
+      </div>
+
+      <div v-else-if="!isAuthenticated" class="max-w-md mx-auto mt-8">
+        <div class="bg-white rounded-xl shadow-sm border border-stone-200 p-8">
+          <h2 class="text-2xl font-bold text-amber-800">Bienvenido</h2>
+          <p class="text-stone-600 text-sm mt-1 mb-6">Inicia sesión o regístrate para continuar.</p>
+          <div class="flex gap-2 mb-6">
+            <button type="button" @click="authMode = 'login'; authError = ''"
+              :class="authMode === 'login' ? 'bg-amber-600 text-white' : 'bg-stone-100 text-stone-700'"
+              class="flex-1 py-2 rounded-lg text-sm font-medium">Iniciar sesión</button>
+            <button type="button" @click="authMode = 'register'; authError = ''"
+              :class="authMode === 'register' ? 'bg-amber-600 text-white' : 'bg-stone-100 text-stone-700'"
+              class="flex-1 py-2 rounded-lg text-sm font-medium">Registrarse</button>
+          </div>
+          <div v-if="authError" class="mb-4 p-3 rounded-lg bg-red-50 text-red-800 text-sm">{{ authError }}</div>
+          <div v-if="authSuccess" class="mb-4 p-3 rounded-lg bg-green-50 text-green-800 text-sm">{{ authSuccess }}</div>
+          <form v-if="authMode === 'login'" @submit.prevent="signIn" class="space-y-4">
+            <div>
+              <label class="block text-sm font-medium mb-1">Email</label>
+              <input v-model="authForm.email" type="email" required autocomplete="email"
+                class="w-full border border-stone-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-amber-500 outline-none" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium mb-1">Contraseña</label>
+              <input v-model="authForm.password" type="password" required autocomplete="current-password"
+                class="w-full border border-stone-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-amber-500 outline-none" />
+            </div>
+            <button type="submit" :disabled="authSubmitting"
+              class="w-full bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-medium py-2.5 rounded-lg">
+              {{ authSubmitting ? 'Entrando…' : 'Iniciar sesión' }}
+            </button>
+          </form>
+          <form v-else @submit.prevent="signUp" class="space-y-4">
+            <div>
+              <label class="block text-sm font-medium mb-1">Email</label>
+              <input v-model="authForm.email" type="email" required class="w-full border border-stone-300 rounded-lg px-3 py-2" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium mb-1">Contraseña</label>
+              <input v-model="authForm.password" type="password" required minlength="6" class="w-full border border-stone-300 rounded-lg px-3 py-2" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium mb-1">Nombre de usuario *</label>
+              <input v-model="authForm.username" type="text" required class="w-full border border-stone-300 rounded-lg px-3 py-2" />
+            </div>
+            <div>
+              <label class="block text-sm font-medium mb-1">Nombre completo</label>
+              <input v-model="authForm.full_name" type="text" class="w-full border border-stone-300 rounded-lg px-3 py-2" />
+            </div>
+            <button type="submit" :disabled="authSubmitting"
+              class="w-full bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-medium py-2.5 rounded-lg">
+              {{ authSubmitting ? 'Creando…' : 'Crear cuenta' }}
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <div v-else class="max-w-4xl mx-auto space-y-6">
+        <!-- Perfil -->
+        <section v-show="activeView === 'auth'" class="bg-white rounded-xl border border-stone-200 p-6">
+          <h2 class="text-xl font-semibold text-amber-800 mb-4">Mi perfil</h2>
+          <dl class="grid gap-4 text-sm sm:grid-cols-2">
+            <div><dt class="text-stone-500">Email</dt><dd class="font-medium">{{ userEmail }}</dd></div>
+            <div><dt class="text-stone-500">ID Auth</dt><dd class="font-mono text-xs break-all">{{ currentUserId }}</dd></div>
+            <div v-if="profile"><dt class="text-stone-500">Usuario</dt><dd>@{{ profile.username }}</dd></div>
+            <div v-if="profile?.full_name"><dt class="text-stone-500">Nombre</dt><dd>{{ profile.full_name }}</dd></div>
+          </dl>
+          <p class="mt-4 text-xs text-stone-500">El perfil se crea automáticamente en <code>profiles</code> al iniciar sesión si no existe.</p>
+          <button type="button" @click="signOut" class="mt-4 border border-stone-300 px-4 py-2 rounded-lg hover:bg-stone-50">Cerrar sesión</button>
+        </section>
+
+        <!-- US-01 -->
+        <section v-show="activeView === 'recipes'" class="bg-white rounded-xl border border-stone-200 p-6">
+          <h2 class="text-xl font-semibold text-amber-800">Nueva receta</h2>
+          <p class="text-sm text-stone-500 mb-4">US-01 · user_id: {{ currentUserId }}</p>
+          <div v-if="formMessage" class="mb-4 p-3 rounded-lg text-sm"
+            :class="formMessageType === 'success' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'">{{ formMessage }}</div>
+          <form @submit.prevent="saveRecipe" class="space-y-4">
+            <div class="grid gap-4 sm:grid-cols-2">
+              <div class="sm:col-span-2">
+                <label class="block text-sm font-medium mb-1">Título *</label>
+                <input v-model="form.title" type="text" required class="w-full border border-stone-300 rounded-lg px-3 py-2" />
+              </div>
+              <div class="sm:col-span-2">
+                <label class="block text-sm font-medium mb-1">Descripción</label>
+                <textarea v-model="form.description" rows="2" class="w-full border border-stone-300 rounded-lg px-3 py-2"></textarea>
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">Tiempo (min) *</label>
+                <input v-model.number="form.cooking_time" type="number" min="1" required class="w-full border border-stone-300 rounded-lg px-3 py-2" />
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">Categoría *</label>
+                <select v-model="form.category" required class="w-full border border-stone-300 rounded-lg px-3 py-2">
+                  <option value="">Seleccionar…</option>
+                  <option v-for="c in categories" :key="c" :value="c">{{ c }}</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">Tipo de cocina</label>
+                <select v-model="form.cuisine_type" class="w-full border border-stone-300 rounded-lg px-3 py-2">
+                  <option value="">Seleccionar…</option>
+                  <option v-for="t in cuisineTypes" :key="t" :value="t">{{ t }}</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">URL imagen</label>
+                <input v-model="form.image_url" type="url" class="w-full border border-stone-300 rounded-lg px-3 py-2" />
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">Calorías (US-04)</label>
+                <input v-model.number="form.calories" type="number" min="0" class="w-full border border-stone-300 rounded-lg px-3 py-2" />
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">Proteína g (US-04)</label>
+                <input v-model.number="form.protein" type="number" min="0" class="w-full border border-stone-300 rounded-lg px-3 py-2" />
+              </div>
+            </div>
+            <div>
+              <div class="flex justify-between mb-2">
+                <h3 class="font-medium">Ingredientes *</h3>
+                <button type="button" @click="addIngredient" class="text-sm text-amber-700 font-medium">+ Añadir</button>
+              </div>
+              <div v-for="(ing, i) in ingredients" :key="'ing-' + i" class="grid gap-2 sm:grid-cols-12 mb-2 items-end">
+                <input v-model="ing.name" placeholder="Nombre" required class="sm:col-span-5 border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+                <input v-model.number="ing.amount" type="number" step="0.01" min="0.01" placeholder="Cant." required class="sm:col-span-3 border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+                <input v-model="ing.unit" placeholder="Unidad" required class="sm:col-span-3 border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+                <button v-if="ingredients.length > 1" type="button" @click="removeIngredient(i)" class="text-red-600 text-sm">✕</button>
+              </div>
+            </div>
+            <div>
+              <div class="flex justify-between mb-2">
+                <h3 class="font-medium">Pasos *</h3>
+                <button type="button" @click="addStep" class="text-sm text-amber-700 font-medium">+ Paso</button>
+              </div>
+              <div v-for="(step, i) in steps" :key="'step-' + i" class="flex gap-2 mb-2">
+                <span class="text-stone-500 py-2 w-6">{{ i + 1 }}.</span>
+                <textarea v-model="step.instruction" rows="2" required class="flex-1 border border-stone-300 rounded-lg px-3 py-2 text-sm"></textarea>
+                <button v-if="steps.length > 1" type="button" @click="removeStep(i)" class="text-red-600">✕</button>
+              </div>
+            </div>
+            <button type="submit" :disabled="formLoading"
+              class="bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-medium px-6 py-2.5 rounded-lg">
+              {{ formLoading ? 'Guardando…' : 'Guardar receta' }}
+            </button>
+          </form>
+        </section>
+
+        <!-- US-02 Explorar -->
+        <section v-show="activeView === 'explore'" class="space-y-6">
+          <div class="bg-white rounded-xl border border-stone-200 p-6">
+            <h2 class="text-xl font-semibold text-amber-800 mb-1">Explorar recetas</h2>
+            <p class="text-sm text-stone-500 mb-4">US-02 · Filtros por nombre, ingrediente, categoría y tipo de cocina</p>
+            <div v-if="searchMessage" class="mb-4 p-3 rounded-lg bg-amber-50 text-amber-900 text-sm">{{ searchMessage }}</div>
+            <form @submit.prevent="searchRecipes" class="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label class="block text-sm font-medium mb-1">Nombre</label>
+                <input v-model="search.title" type="text" placeholder="Ej. pasta" class="w-full border border-stone-300 rounded-lg px-3 py-2" />
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">Ingrediente</label>
+                <input v-model="search.ingredient" type="text" placeholder="Ej. tomate" class="w-full border border-stone-300 rounded-lg px-3 py-2" />
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">Categoría</label>
+                <select v-model="search.category" class="w-full border border-stone-300 rounded-lg px-3 py-2">
+                  <option value="">Todas las categorías</option>
+                  <option v-for="c in categories" :key="c" :value="c">{{ c }}</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">Tipo de cocina</label>
+                <select v-model="search.cuisine_type" class="w-full border border-stone-300 rounded-lg px-3 py-2">
+                  <option value="">Todos</option>
+                  <option v-for="t in cuisineTypes" :key="t" :value="t">{{ t }}</option>
+                </select>
+              </div>
+              <div class="sm:col-span-2 flex flex-wrap gap-3">
+                <button type="submit" :disabled="searchLoading"
+                  class="bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-medium px-6 py-2.5 rounded-lg">
+                  {{ searchLoading ? 'Buscando…' : 'Buscar' }}
+                </button>
+                <button type="button" @click="clearSearch" class="border border-stone-300 hover:bg-stone-50 font-medium px-6 py-2.5 rounded-lg">Limpiar</button>
+              </div>
+            </form>
+          </div>
+          <div>
+            <h3 class="text-lg font-semibold text-amber-800 mb-3">Resultados</h3>
+            <p v-if="searchLoading" class="text-stone-500">Cargando…</p>
+            <p v-else-if="hasSearched && results.length === 0" class="text-stone-500">Sin resultados.</p>
+            <p v-else-if="!hasSearched" class="text-stone-500">Usa los filtros y pulsa Buscar.</p>
+            <ul v-else class="space-y-3">
+              <li v-for="recipe in results" :key="recipe.id" class="bg-white rounded-xl border border-stone-200 p-5 flex gap-4 justify-between">
+                <div class="min-w-0 flex-1">
+                  <h4 class="font-semibold text-stone-900">{{ recipe.title }}</h4>
+                  <p class="text-sm text-stone-600 mt-1">
+                    <span class="font-medium text-amber-800">{{ recipe.category }}</span>
+                    <span v-if="recipe.cuisine_type"> · {{ recipe.cuisine_type }}</span>
+                    · {{ recipe.cooking_time }} min
+                  </p>
+                  <p v-if="recipe.description" class="text-sm text-stone-700 mt-2 line-clamp-2">{{ recipe.description }}</p>
+                  <p class="text-xs text-stone-500 mt-2">{{ recipe.calories || 0 }} kcal · {{ recipe.protein || 0 }} g proteína</p>
+                </div>
+                <button type="button" @click="toggleFavorite(recipe)" :title="isFavorite(recipe.id) ? 'Quitar favorito' : 'Añadir favorito'"
+                  class="shrink-0 text-2xl hover:scale-110 transition">{{ isFavorite(recipe.id) ? '❤️' : '🤍' }}</button>
+              </li>
+            </ul>
+          </div>
+        </section>
+
+        <!-- US-03 Favoritos -->
+        <section v-show="activeView === 'favorites'" class="space-y-4">
+          <div class="bg-white rounded-xl border border-stone-200 p-6">
+            <h2 class="text-xl font-semibold text-amber-800">Mis favoritos</h2>
+            <p class="text-sm text-stone-500">US-03 · Tabla <code>favorites</code></p>
+          </div>
+          <p v-if="favoritesLoading" class="text-stone-500">Cargando favoritos…</p>
+          <p v-else-if="!favoritesList.length" class="text-stone-500 bg-white border rounded-xl p-8 text-center">Aún no tienes recetas favoritas. Márcalas desde Explorar.</p>
+          <ul v-else class="space-y-3">
+            <li v-for="recipe in favoritesList" :key="recipe.id" class="bg-white rounded-xl border border-stone-200 p-5 flex justify-between gap-4">
+              <div>
+                <h4 class="font-semibold">{{ recipe.title }}</h4>
+                <p class="text-sm text-stone-600">{{ recipe.category }} · {{ recipe.cooking_time }} min</p>
+              </div>
+              <button type="button" @click="toggleFavorite(recipe)" class="text-2xl" title="Quitar">❤️</button>
+            </li>
+          </ul>
+        </section>
+
+        <!-- US-04 Nutrición -->
+        <section v-show="activeView === 'nutrition'" class="space-y-4">
+          <div class="bg-white rounded-xl border border-stone-200 p-6">
+            <h2 class="text-xl font-semibold text-amber-800">Valores nutricionales</h2>
+            <p class="text-sm text-stone-500 mb-4">US-04 · Calorías y proteínas por receta</p>
+            <div class="flex flex-wrap gap-3 items-end">
+              <div>
+                <label class="block text-sm font-medium mb-1">Filtrar por categoría</label>
+                <select v-model="nutritionFilter.category" @change="loadNutrition" class="border border-stone-300 rounded-lg px-3 py-2">
+                  <option value="">Todas</option>
+                  <option v-for="c in categories" :key="c" :value="c">{{ c }}</option>
+                </select>
+              </div>
+              <button type="button" @click="loadNutrition" class="bg-amber-600 text-white px-4 py-2 rounded-lg text-sm">Actualizar</button>
+            </div>
+          </div>
+          <div v-if="nutritionRecipes.length" class="grid gap-4 sm:grid-cols-3">
+            <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 text-center">
+              <p class="text-2xl font-bold text-amber-900">{{ nutritionStats.count }}</p>
+              <p class="text-xs text-amber-800">Recetas</p>
+            </div>
+            <div class="bg-green-50 border border-green-200 rounded-xl p-4 text-center">
+              <p class="text-2xl font-bold text-green-900">{{ nutritionStats.totalCalories }}</p>
+              <p class="text-xs text-green-800">kcal totales</p>
+            </div>
+            <div class="bg-blue-50 border border-blue-200 rounded-xl p-4 text-center">
+              <p class="text-2xl font-bold text-blue-900">{{ nutritionStats.totalProtein }} g</p>
+              <p class="text-xs text-blue-800">Proteína total</p>
+            </div>
+          </div>
+          <p v-if="nutritionLoading" class="text-stone-500">Cargando…</p>
+          <div v-else class="bg-white rounded-xl border border-stone-200 overflow-hidden">
+            <table class="w-full text-sm">
+              <thead class="bg-stone-50 border-b">
+                <tr>
+                  <th class="text-left p-3 font-medium">Receta</th>
+                  <th class="text-left p-3 font-medium">Categoría</th>
+                  <th class="text-right p-3 font-medium">kcal</th>
+                  <th class="text-right p-3 font-medium">Proteína</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="r in nutritionRecipes" :key="r.id" class="border-b border-stone-100 hover:bg-stone-50">
+                  <td class="p-3 font-medium">{{ r.title }}</td>
+                  <td class="p-3 text-stone-600">{{ r.category }}</td>
+                  <td class="p-3 text-right">{{ r.calories ?? 0 }}</td>
+                  <td class="p-3 text-right">{{ r.protein ?? 0 }} g</td>
+                </tr>
+              </tbody>
+            </table>
+            <p v-if="!nutritionRecipes.length" class="p-8 text-center text-stone-500">No hay recetas para mostrar.</p>
+          </div>
+        </section>
+
+        <!-- Placeholders -->
+        <section v-for="(meta, key) in placeholderViews" :key="key" v-show="activeView === key"
+          class="bg-white rounded-xl border border-stone-200 p-8 text-center">
+          <h2 class="text-xl font-semibold text-amber-800">{{ meta.title }}</h2>
+          <p class="text-stone-500 mt-2">{{ meta.us }} — Próximamente.</p>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="supabase-config.js"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
